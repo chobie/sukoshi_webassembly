@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+table td, table td * {vertical-align: top;}
+header {font:bold 2.5vw Arial,sans-serif;}
+    </style>
+    </head>
+    <body>
+        <header>Sukoshi WebAssembly Simulator: Validation & Exectuion Example</header>
+        <main><table border="1">
+            <tr>
+                <td><div id="supported opcodes">Supported Opcodes</div></td>
+                <td>
+                    <div>
+                        <div>Instruction Set</div>
+                        <select id="instruction-select">
+                            <option value="def">サンプル</option>
+                            <option value="basicArithmetic">1. 基本的な算術と条件</option>
+                            <option value="conditionalBranching">2. 条件付き分岐</option>
+                            <option value="looping">3. 繰り返し</option>
+                            <option value="valueSelection">4. 値の選択</option>
+                            <option value="localVariables">5. ローカル変数 (検証エラー)</option>
+                            <option value="nestedBlocks">6. ネストしたブロック</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <div>Function Signature [result types]<br /><textarea id="signature" style="width:450px;">["i32"]</textarea></div>
+                        <br />
+                        [[opcode], [input parameters type], [result types], [immediates]]
+                    </div>
+                        <textarea id="instructions" style="width:450px;height:400px;"></textarea>
+                        <div>
+                            <input type="button" value="Validation" onclick="run_validation(document.getElementById('instructions').value)">
+                            <input type="button" value="Run" onclick="run(document.getElementById('instructions').value)">
+                            <input type="button" value="Step" onclick="step_exec()">
+                            <input type="button" value="Clear" onclick="clear_texts()">
+                        </div>
+                        </td>
+                        <td>
+                            <div>VALIDATE</div>
+                            <textarea style="height:500px;" id="validate_log"></textarea>
+                        </td>
+                        <td>
+                            <div>DEBUG</div>
+                            <textarea style="height:500px;" id="log"></textarea>
+                        </td>
+                        <td>
+                            <div>STACK</div>
+                            <textarea style="height:500px;" id="stack"></textarea>
+                        </td>
+            </tr>
+            <tr>
+                <td colspan="5">
+                    <div id="validation">&nbsp;</div>
+                    <div id="result">&nbsp;</div>
+                </td>
+        </table>
+        <div><a href="https://labs.gree.jp/blog/2024/12/24431/">WebAssembly Validationアルゴリズムの学び方</a></div>
+        <div><a href="https://qiita.com/advent-calendar/2024/wasm">WebAssembly / Wasm Advent Calendar 2024</a></div>
+        </main>
+        <script type="text/javascript" src="sukoshi_wasm.js"></script>
+        <script type="text/javascript">
+            window.addEventListener("load", function() {
+                const supportedOpcodes = Object.values(OP_CODE).map(key => "<li>" + key + "</li>").join("");
+                document.getElementById("supported opcodes").innerHTML = `Supported Opcodes:<ul> ${supportedOpcodes}</ul>`;
+                const instructionDetails = {
+                    def: `[
+  ["block", [], ["i32"], []], // 帰り値を要求するブロック
+  ["i32.const", [], [], [3]],
+  ["i32.const", [], [], [3]],
+  ["i32.rem_s", [], [], []], // 3 % 3 = 0 で結果が0ならif
+  ["i32.const", [], [], [0]],
+  ["i32.eq", [], [], []],
+  ["if", [], ["i32"], []], // 帰り値を要求するif
+  ["i32.const", [], [], [1]],
+  ["else", [],[], []],
+  ["i32.const", [], [], [0]],
+  ["end", [], [], []],
+  ["end", [], [], []]
+]`,
+                    // 基本的な算術と条件
+                    basicArithmetic: `[
+  ["i32.const", [], [], [42]],  // 定数42をプッシュ
+  ["i32.const", [], [], [7]],   // 定数7をプッシュ
+  ["i32.add", [], [], []],      // 2つのi32を加算
+  ["i32.const", [], [], [3]],   // 定数3をプッシュ
+  ["i32.rem_s", [], [], []],    // 割り算の余り（符号付き）
+  ["i32.const", [], [], [1]],   // 定数1をプッシュ
+  ["i32.eq", [], [], []]        // 結果が等しいかどうかを比較
+]`,
+                    // 条件付き分岐
+                    conditionalBranching: `[
+  ["i32.const", [], [], [1]],   // 条件として1をプッシュ
+  ["if", [], ["i32"], []],      // 条件付きブロック開始
+  ["i32.const", [], [], [100]], // 条件が真の場合の処理
+  ["else", [], [], []],         // 条件が偽の場合の処理
+  ["i32.const", [], [], [200]], // 条件が偽の場合の値
+  ["end", [], [], []]           // ブロック終了
+]`,
+                    // 繰り返し
+                    looping: `[
+  ["local", [], [], [0, "i32"]], // カウンタを初期化（0に設定）
+  ["loop", [], ["i32"],[]],
+    ["local.get", [], [], [0]],          // local[0] を取得
+    ["i32.const", [], [], [1]],             // 定数1をプッシュ
+    ["i32.add", [], [], []],                // local[0]  に1を加算
+    ["local.set", [], [], [0]],          // 結果を local[0] に保存
+    ["local.get", [], [], [0]],          // local[0] を取得
+    ["i32.const", [], [], [10]],            // 定数10をプッシュ
+    ["i32.lt_s", [], [], []],               // $i < 10 の比較
+    ["br_if", [], [], [0]],         // 条件が真なら $my_loop に分岐
+    ["local.get", [], [], [0]],          // local[0] を取得    
+  ["end", [], [], []]
+]`,
+
+                    // 値の選択
+                    valueSelection: `[
+  ["i32.const", [], [], [5]],   // 定数5をプッシュ
+  ["i32.const", [], [], [10]],  // 定数10をプッシュ
+  ["i32.const", [], [], [1]],   // 条件として1をプッシュ
+  ["select", [], [], []]        // 条件が真なら5、偽なら10を選択
+]`,
+
+                    // ローカル変数
+                    localVariables: `[
+  ["local", [], [], [0, "i32"]],// ローカル変数0 i32を宣言
+  ["local.get", [], [], [0]],   // ローカル変数0を取得
+  ["i32.const", [], [], [3]],   // 定数3をプッシュ
+  ["i32.add", [], [], []],      // 加算
+  ["local.set", [], [], [1]],   // 結果をローカル変数1に保存(未定義のためエラー)
+  ["local.get", [], [], [0]]   // ローカル変数0を取得
+]`,
+
+                    // ネストしたブロック
+                    nestedBlocks: `[
+  // SpecificationのTestにもある地味に難しくなりがちなTestです
+  ["block", [], ["i32"], []],   // 外側のブロック
+    ["block", [], ["i32"], []],   // 内側のブロック
+      ["i32.const", [], [], [5]],   // 定数5をプッシュ
+      ["br", [], [], [1]],          // 外側のブロックにジャンプ
+    ["end", [], [], []],          // 内側ブロック終了
+    ["drop", [], [], []],         // br 0用の帳尻合わせ
+    ["i32.const", [], [], [10]],  // 外側ブロックの続き(br 1なのでここは実行されません！)
+  ["end", [], [], []]           // 外側ブロック終了
+]`
+                };
+
+                document.getElementById("instructions").value = instructionDetails["looping"];
+
+                const urlParams = new URLSearchParams(window.location.search);
+                const instructionKey = urlParams.get("key");
+
+                if (instructionKey && instructionDetails[instructionKey]) {
+                    document.getElementById("instruction-select").value = instructionKey;
+                    document.getElementById("instructions").value = instructionDetails[instructionKey];
+                }
+
+                document.getElementById("instruction-select").addEventListener("change", function() {
+                    const selectedValue = this.value;
+                    const instructionsTextarea = document.getElementById("instructions");
+
+                    if (selectedValue && instructionDetails[selectedValue]) {
+                        instructionsTextarea.value = instructionDetails[selectedValue];
+                    } else {
+                        instructionsTextarea.value = ""; // 何も選択されていない場合
+                    }
+                });
+            });
+        </script>
+    </body>
+</html>
